@@ -97,7 +97,7 @@ DATABASES = {
 # Configuração de Banco de Dados para Produção (Render.com)
 # Render.com injeta uma variável de ambiente DATABASE_URL.
 # Você precisará instalar 'dj-database-url' para usá-lo.
-if not DEBUG: # <--- ESTE BLOCO ESTAVA COMENTADO. É CRUCIAL DESCOMENTAR!
+if not DEBUG: # <--- ESTE BLOCO AGORA ESTÁ DESCOMENTADO!
     import dj_database_url
     DATABASES['default'] = dj_database_url.config(conn_max_age=600)
 
