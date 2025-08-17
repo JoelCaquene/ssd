@@ -18,8 +18,12 @@ from django.utils import timezone
 import pytz
 import random
 from decimal import Decimal # Importa a classe Decimal
+from django.contrib.auth.forms import PasswordChangeForm 
 
 def cadastro_view(request):
+    config = Config.objects.first() # Obter config antes para usar no contexto
+    invitation_code_from_url = request.GET.get('convite') # Obter código da URL para passar ao template
+
     if request.method == 'POST':
         phone_number = request.POST.get('phone_number')
         password = request.POST.get('password')
@@ -38,6 +42,7 @@ def cadastro_view(request):
             messages.error(request, 'A senha deve ter no mínimo 4 dígitos.')
             return redirect('cadastro')
 
+        # Verifica se o número de telefone já está em uso ANTES de tentar criar o usuário
         if Usuario.objects.filter(phone_number=phone_number).exists():
             messages.error(request, 'Este número de telefone já está em uso.')
             return redirect('cadastro')
@@ -72,15 +77,19 @@ def cadastro_view(request):
             messages.success(request, 'Cadastro realizado com sucesso! Faça login para continuar.')
             return redirect('login')
         except IntegrityError as e:
-            messages.error(request, 'Ocorreu um erro de duplicidade. O número de telefone ou o código de convite podem já estar em uso.')
+            # CORRIGIDO: Esta mensagem de erro agora é mais específica se o phone_number já existe,
+            # mas é genérica para outros erros de integridade. A verificação acima já trata
+            # o phone_number duplicado antes de chegar aqui.
+            messages.error(request, 'Ocorreu um erro de duplicidade ao criar o usuário. Tente novamente ou contate o suporte.')
             return redirect('cadastro')
         except Exception as e:
             messages.error(request, f'Ocorreu um erro inesperado ao tentar cadastrar: {e}')
             return redirect('cadastro')
 
-    config = Config.objects.first()
+    # Passa o código de convite do URL para o template, se existir
     context = {
-        'config': config
+        'config': config,
+        'convite_code': invitation_code_from_url # Passa para o template
     }
     return render(request, 'plataforma/cadastro.html', context)
 
@@ -153,9 +162,7 @@ def deposito_view(request):
                 banco_selecionado = PlatformBankDetails.objects.get(nome_banco=banco_nome)
             except PlatformBankDetails.DoesNotExist:
                 messages.error(request, 'Banco não encontrado.')
-            # Não é necessário redirecionar ou renderizar aqui, pois é a primeira etapa
-            # do formulário de depósito. A lógica de envio real é no 'proof' (comprovante).
-            
+                
     context = {
         'bancos': bancos,
         'banco_selecionado': banco_selecionado,

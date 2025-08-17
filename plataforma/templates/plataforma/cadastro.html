@@ -108,10 +108,22 @@
             <input type="tel" name="phone_number" placeholder="Número de Telefone" required>
             <input type="password" name="password" placeholder="Senha (Mínimo 4 dígitos)" minlength="4" required>
             <input type="password" name="password_confirm" placeholder="Confirmar Senha" minlength="4" required>
-            <input type="text" name="invitation_code" placeholder="Código de Convite (opcional)">
+            <input type="text" name="invitation_code" placeholder="Código de Convite (opcional)" 
+                   value="{{ request.GET.convite|default:'' }}"> {# <--- CORREÇÃO AQUI #}
             <button type="submit">Cadastrar</button>
         </form>
         <a href="{% url 'login' %}" class="nav-link">Já tem uma conta? Entrar</a>
     </div>
+
+    {# Script para preencher o campo de convite ao carregar a página #}
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const conviteCode = urlParams.get('convite');
+            if (conviteCode) {
+                document.querySelector('input[name="invitation_code"]').value = conviteCode;
+            }
+        });
+    </script>
 </body>
 </html>
