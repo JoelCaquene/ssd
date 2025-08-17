@@ -192,22 +192,29 @@ def aprovar_deposito_com_subsidio(deposito_id):
     deposito.status = 'Aprovado'
     deposito.save()
 
-    # Adiciona o valor do depósito ao saldo disponível do usuário que fez o depósito
+    # CRÍTICO: Adiciona o valor do DEPÓSITO (o dinheiro do próprio usuário) ao saldo disponível do usuário.
+    # Isto NÃO é um subsídio. É o valor que o usuário depositou sendo creditado.
     deposito.usuario.saldo_disponivel += deposito.valor
     deposito.usuario.save()
 
-    # Verifica se o depositante (usuário que acabou de ter o depósito aprovado) foi convidado por alguém
     convidador = deposito.usuario.inviter
-    if convidador:
+    
+    # LÓGICA DE SUBSÍDIO PARA O CONVIDADOR:
+    # O convidador SÓ ganha subsídio se:
+    # 1. Existir um convidador (ou seja, o depositante foi convidado).
+    # 2. O convidador tiver um nível ativo.
+    if convidador and NivelAlugado.objects.filter(usuario=convidador, is_active=True).exists():
         percentagem_subs_convite = Decimal('0.15') # 15% de subsídio
         valor_subs_convite = deposito.valor * percentagem_subs_convite
 
-        # Adiciona o subsídio ao convidador
+        # Adiciona o subsídio APENAS ao convidador.
         convidador.saldo_subsidio += valor_subs_convite
-        convidador.saldo_disponivel += valor_subs_convite # O subsídio também soma no saldo disponível
+        convidador.saldo_disponivel += valor_subs_convite # O subsídio também soma no saldo disponível do convidador
         convidador.save()
         print(f"Subsídio de {valor_subs_convite:.2f} Kz concedido ao convidador {convidador.username if convidador.username else convidador.phone_number} pelo depósito de {deposito.usuario.username if deposito.usuario.username else deposito.usuario.phone_number}.")
-
+    elif convidador: # Se existe convidador mas NÃO tem nível ativo
+        print(f"Convidador {convidador.username if convidador.username else convidador.phone_number} não tem nível ativo. Subsídio de convite NÃO concedido.")
+    
     return {'status': 'success', 'message': f'Depósito {deposito_id} aprovado e subsídio concedido, se aplicável.'}
 
 
@@ -241,6 +248,12 @@ def saque_view(request):
         tem_detalhes_bancarios = False
         iban_cliente = None
         messages.warning(request, "Por favor, preencha suas coordenadas bancárias no seu perfil antes de solicitar um saque.")
+
+    # NOVA LÓGICA: Usuário só pode sacar se tiver um nível ativo.
+    has_active_level_user = NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists()
+    if not has_active_level_user:
+        messages.error(request, "Você precisa ter um nível de investimento ativo para realizar saques.")
+        return redirect('menu') # Ou outra página apropriada
 
     if request.method == 'POST':
         if not tem_detalhes_bancarios:
@@ -341,7 +354,7 @@ def realizar_tarefa(request):
 
         except Exception as e:
             print(f"Erro ao processar tarefa para nível {nivel_alugado.nivel.nome_nivel}: {e}")
-            return JsonResponse({'status': 'error', 'message': f'Erro interno ao processar um dos níveis: {e}'}, status=500)
+            return JsonResponse({'status': 'error', 'message': f'Ocorreu um erro interno ao processar um dos níveis: {e}'}, status=500)
 
     usuario.save()
     
