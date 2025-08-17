@@ -6,7 +6,7 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 import json
 import uuid
-from django.db import models
+from django.db import models, transaction # Importar transaction
 from .models import (
     Config, Usuario, Nivel, PlatformBankDetails, Deposito, 
     ClientBankDetails, NivelAlugado, Saque, Renda, Tarefa, PremioSubsidio, Sobre
@@ -17,12 +17,12 @@ from datetime import timedelta, datetime
 from django.utils import timezone
 import pytz
 import random
-from decimal import Decimal # Importa a classe Decimal
+from decimal import Decimal
 from django.contrib.auth.forms import PasswordChangeForm 
 
 def cadastro_view(request):
-    config = Config.objects.first() # Obter config antes para usar no contexto
-    invitation_code_from_url = request.GET.get('convite') # Obter código da URL para passar ao template
+    config = Config.objects.first()
+    invitation_code_from_url = request.GET.get('convite')
 
     if request.method == 'POST':
         phone_number = request.POST.get('phone_number')
@@ -56,40 +56,45 @@ def cadastro_view(request):
                 return redirect('cadastro')
 
         try:
-            new_user_invitation_code = None
-            while True:
-                temp_code = str(uuid.uuid4()).replace('-', '')[:10]
-                if not Usuario.objects.filter(invitation_code=temp_code).exists():
-                    new_user_invitation_code = temp_code
-                    break
+            # Usar transaction.atomic() para garantir que a criação do usuário e da renda seja atómica
+            with transaction.atomic():
+                new_user_invitation_code = None
+                while True: # Gerar um código de convite único para o novo usuário
+                    temp_code = str(uuid.uuid4()).replace('-', '')[:10]
+                    if not Usuario.objects.filter(invitation_code=temp_code).exists():
+                        new_user_invitation_code = temp_code
+                        break
 
-            user = Usuario.objects.create_user(
-                phone_number=phone_number, 
-                password=password, 
-                invitation_code=new_user_invitation_code, 
-                inviter=inviter_user 
-            )
-            
-            user.username = phone_number 
-            user.save()
-            Renda.objects.create(usuario=user)
+                user = Usuario.objects.create_user(
+                    phone_number=phone_number, 
+                    password=password, 
+                    invitation_code=new_user_invitation_code, 
+                    inviter=inviter_user 
+                )
+                # O UsuarioManager.create_user já chama Renda.objects.create(usuario=user)
+                # Se create_user for bem-sucedido, tanto o usuário quanto o seu objeto Renda são criados.
+                
+                # Atualizar o username (se necessário, embora phone_number já seja único)
+                user.username = phone_number 
+                user.save() # Guardar quaisquer alterações no objeto usuário (como o username)
 
+            # Se chegarmos aqui, o usuário e a Renda foram criados com sucesso
             messages.success(request, 'Cadastro realizado com sucesso! Faça login para continuar.')
             return redirect('login')
         except IntegrityError as e:
-            # CORRIGIDO: Esta mensagem de erro agora é mais específica se o phone_number já existe,
-            # mas é genérica para outros erros de integridade. A verificação acima já trata
-            # o phone_number duplicado antes de chegar aqui.
-            messages.error(request, 'Ocorreu um erro de duplicidade ao criar o usuário. Tente novamente ou contate o suporte.')
+            # Este catch é para qualquer outro IntegrityError que ocorra durante o bloco atómico,
+            # como uma condição de corrida muito rara no invitation_code ou outras restrições únicas.
+            # Se o usuário foi criado, o transaction.atomic() deveria ter revertido tudo.
+            messages.error(request, 'Ocorreu um erro de duplicidade ao tentar cadastrar o usuário. Por favor, tente novamente ou contate o suporte.')
             return redirect('cadastro')
         except Exception as e:
+            # Erro genérico para quaisquer outros problemas inesperados
             messages.error(request, f'Ocorreu um erro inesperado ao tentar cadastrar: {e}')
             return redirect('cadastro')
 
-    # Passa o código de convite do URL para o template, se existir
     context = {
         'config': config,
-        'convite_code': invitation_code_from_url # Passa para o template
+        'convite_code': invitation_code_from_url
     }
     return render(request, 'plataforma/cadastro.html', context)
 
@@ -321,7 +326,7 @@ def realizar_tarefa(request):
         return JsonResponse({'status': 'error', 'message': 'Você não tem um nível ativo para realizar a tarefa.'}, status=403)
 
     agora = timezone.now()
-    total_ganho_tarefas = Decimal('0.00') # CORRIGIDO: Usar Decimal
+    total_ganho_tarefas = Decimal('0.00')
 
     for nivel_alugado in niveis_alugados_ativos:
         if nivel_alugado.ultima_tarefa and (agora - nivel_alugado.ultima_tarefa) < timedelta(hours=24):
@@ -365,28 +370,24 @@ def alugar_nivel(request):
     except Nivel.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': 'Nível não encontrado.'}, status=404)
 
-    # Verificar se o usuário já tem um nível alugado
     if NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists():
         return JsonResponse({'status': 'error', 'message': 'Você já tem um nível alugado ativo.'}, status=400)
     
-    # Corrigido: Verifique o saldo do usuário com base no deposito_minimo
     if usuario.saldo_disponivel < nivel_a_alugar.deposito_minimo:
         return JsonResponse({'status': 'error', 'message': 'Saldo insuficiente para alugar este nível.'}, status=400)
     
     try:
-        # Corrigido: Debite o valor do deposito_minimo do saldo do usuário
-        usuario.saldo_disponivel -= nivel_a_alugar.deposito_minimo
-        
-        # Correção: O modelo NivelAlugado() não tem os campos 'custo_aluguel' e 'ganho_diario'.
-        # Esses valores podem ser acessados através da relação com o modelo Nivel.
-        NivelAlugado.objects.create(
-            usuario=usuario,
-            nivel=nivel_a_alugar,
-            data_inicio=timezone.now(),
-            is_active=True
-        )
-        
-        usuario.save()
+        with transaction.atomic(): # Garante que a transação seja atómica
+            usuario.saldo_disponivel -= nivel_a_alugar.deposito_minimo
+            
+            NivelAlugado.objects.create(
+                usuario=usuario,
+                nivel=nivel_a_alugar,
+                data_inicio=timezone.now(),
+                is_active=True
+            )
+            
+            usuario.save()
         
         return JsonResponse({'status': 'success', 'message': f'Nível {nivel_a_alugar.nome_nivel} alugado com sucesso!'})
         
@@ -480,14 +481,10 @@ def editar_senha_view(request):
     }
     return render(request, 'plataforma/editar_senha.html', context)
 
-# Nova view para exibir a página de Prêmios de Subsídio
 @login_required
 def premios_subsidios_view(request):
-    # Não precisamos de lógica complexa aqui, apenas renderizar o template.
-    # Os prêmios (PremioSubsidio) serão carregados diretamente pelo JavaScript no frontend, se necessário.
     return render(request, 'plataforma/premios_subsidios.html')
 
-# Nova view para a lógica de abrir o prêmio de subsídio
 @login_required
 @require_POST
 def abrir_premio(request):
@@ -497,7 +494,6 @@ def abrir_premio(request):
 
         usuario = request.user
 
-        # Lógicas de verificação de permissão e saldo (reaproveitando os campos existentes)
         has_approved_deposit = Deposito.objects.filter(usuario=usuario, status='Aprovado').exists()
         has_active_level = NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists()
         
@@ -507,26 +503,23 @@ def abrir_premio(request):
         if not has_active_level:
             return JsonResponse({'status': 'error', 'message': 'Você precisa ter um nível alugado ativo para abrir o prêmio.'}, status=403)
         
-        # O administrador é quem libera a permissão para abrir o prêmio e a quantidade de aberturas
-        if not usuario.can_spin_roulette: # Usando o campo can_spin_roulette para a nova funcionalidade
+        if not usuario.can_spin_roulette:
             return JsonResponse({'status': 'error', 'message': 'Você não tem permissão para abrir o prêmio. Contate o administrador.'}, status=403)
         
-        if usuario.spins_remaining <= 0: # Usando o campo spins_remaining para a nova funcionalidade
+        if usuario.spins_remaining <= 0:
             return JsonResponse({'status': 'error', 'message': 'Você não tem prêmios restantes para abrir. Contate o administrador.'}, status=403)
         
-        premios = list(PremioSubsidio.objects.all()) # Usando o novo modelo PremioSubsidio
+        premios = list(PremioSubsidio.objects.all())
         
         if not premios:
             return JsonResponse({'status': 'error', 'message': 'Não há prêmios de subsídio configurados.'}, status=500)
 
-        # Lógica para garantir que a soma das chances não cause erros
         total_chance = sum(p.chance for p in premios)
         if total_chance == 0:
             return JsonResponse({'status': 'error', 'message': 'As chances dos prêmios de subsídio não estão configuradas corretamente.'}, status=500)
 
-        # CORREÇÃO AQUI: Converter o resultado de random.uniform para Decimal
-        r = Decimal(str(random.uniform(0, float(total_chance)))) # Convertemos para string e depois para Decimal
-        acumulated_chance = Decimal('0.00') # CORRIGIDO: Iniciar com Decimal
+        r = Decimal(str(random.uniform(0, float(total_chance))))
+        acumulated_chance = Decimal('0.00')
         premio_ganho = None
         
         for i, premio in enumerate(premios):
@@ -536,28 +529,24 @@ def abrir_premio(request):
                 break
                 
         if premio_ganho is None:
-            # Caso o random não encontre um prêmio (situação improvável mas segura)
             premio_ganho = random.choice(premios)
 
-        # O valor do prêmio é um Decimal, e os saldos do usuário também são Decimais,
-        # então a soma deve ser direta sem conversões para float, evitando o erro.
         usuario.saldo_disponivel += premio_ganho.valor
         usuario.saldo_subsidio += premio_ganho.valor 
         
-        usuario.spins_remaining -= 1 # Decrementa o contador de "giros" (agora aberturas)
+        usuario.spins_remaining -= 1
         usuario.save()
 
         return JsonResponse({
             'status': 'success',
             'message': f'Parabéns! Você ganhou {premio_ganho.valor:.2f} Kz em subsídios!',
-            'winning_value': float(premio_ganho.valor), # Converte para float para o JSON, mas a soma é feita com Decimal.
+            'winning_value': float(premio_ganho.valor),
         })
 
     except json.JSONDecodeError:
         return JsonResponse({'status': 'error', 'message': 'Requisição inválida.'}, status=400)
     except Exception as e:
-        # Retorna uma resposta JSON mesmo em caso de erro, para evitar o `SyntaxError` no frontend
-        print(f"Erro ao abrir prêmio de subsídio: {e}") # Para debug
+        print(f"Erro ao abrir prêmio de subsídio: {e}")
         return JsonResponse({'status': 'error', 'message': f'Ocorreu um erro interno ao abrir o prêmio: {e}'}, status=500)
 
 @login_required
@@ -578,7 +567,7 @@ def renda_view(request):
     else:
         nivel_cliente = "Nível Básico (Sem nível alugado)"
 
-    depositos_aprovados_sum = Deposito.objects.filter(usuario=usuario, status='Aprovado').aggregate(models.Sum('valor'))['valor__sum'] or Decimal('0.00') # CORRIGIDO: Usar Decimal
+    depositos_aprovados_sum = Deposito.objects.filter(usuario=usuario, status='Aprovado').aggregate(models.Sum('valor'))['valor__sum'] or Decimal('0.00')
     
     context = {
         'nivel_cliente': nivel_cliente,
