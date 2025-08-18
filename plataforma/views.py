@@ -176,7 +176,7 @@ def deposito_view(request):
     return render(request, 'plataforma/deposito.html', context)
 
 # IMPORTANTE: Esta função contém a lógica para *aprovar* depósitos e conceder o subsídio de 15%.
-# Ela deve ser chamada a partir do painel de administração Django ou de uma view personalizada
+# Ela deve ser chamada a partir do seu painel de administração Django ou de uma view personalizada
 # para processar a aprovação dos depósitos enviados pelos usuários.
 def aprovar_deposito_com_subsidio(deposito_id):
     try:
@@ -262,13 +262,6 @@ def saque_view(request):
         tem_detalhes_bancarios = False
         iban_cliente = None
         messages.warning(request, "Por favor, preencha suas coordenadas bancárias no seu perfil antes de solicitar um saque.")
-
-    # REMOVIDO: A verificação de nível ativo para ACESSO à página de saque.
-    # A página agora é acessível a todos, mas as validações de saque ainda se aplicam.
-    # has_active_level_user = NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists()
-    # if not has_active_level_user:
-    #     messages.error(request, "Você precisa ter um nível de investimento ativo para realizar saques.")
-    #     return redirect('menu') # Redireciona para o menu se não tiver nível ativo
 
     if request.method == 'POST':
         # Esta validação permanece: só pode sacar quem tem detalhes bancários
