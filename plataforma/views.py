@@ -6,19 +6,19 @@ from django.http import JsonResponse
 from django.views.decorators.http import require_POST
 import json
 import uuid
-from django.db import models, transaction # Importar transaction
+from django.db import models, transaction # Importar transaction para atomicidade
 from .models import (
-    Config, Usuario, Nivel, PlatformBankDetails, Deposito,
+    Config, Usuario, Nivel, PlatformBankDetails, Deposito, 
     ClientBankDetails, NivelAlugado, Saque, Renda, Tarefa, PremioSubsidio, Sobre
 )
-from .forms import UsuarioUpdateForm, ClientBankDetailsForm
+from .forms import UsuarioUpdateForm, ClientBankDetailsForm 
 from django.db import IntegrityError
 from datetime import timedelta, datetime
 from django.utils import timezone
 import pytz
 import random
 from decimal import Decimal
-from django.contrib.auth.forms import PasswordChangeForm
+from django.contrib.auth.forms import PasswordChangeForm 
 
 def cadastro_view(request):
     config = Config.objects.first()
@@ -28,7 +28,7 @@ def cadastro_view(request):
         phone_number = request.POST.get('phone_number')
         password = request.POST.get('password')
         password_confirm = request.POST.get('password_confirm')
-        invitation_code_provided = request.POST.get('invitation_code')
+        invitation_code_provided = request.POST.get('invitation_code') 
 
         if not all([phone_number, password, password_confirm]):
             messages.error(request, 'Por favor, preencha todos os campos.')
@@ -37,7 +37,7 @@ def cadastro_view(request):
         if password != password_confirm:
             messages.error(request, 'As senhas não coincidem.')
             return redirect('cadastro')
-
+        
         if len(password) < 4:
             messages.error(request, 'A senha deve ter no mínimo 4 dígitos.')
             return redirect('cadastro')
@@ -46,7 +46,7 @@ def cadastro_view(request):
         if Usuario.objects.filter(phone_number=phone_number).exists():
             messages.error(request, 'Este número de telefone já está em uso.')
             return redirect('cadastro')
-
+            
         inviter_user = None
         if invitation_code_provided:
             try:
@@ -66,16 +66,16 @@ def cadastro_view(request):
                         break
 
                 user = Usuario.objects.create_user(
-                    phone_number=phone_number,
-                    password=password,
-                    invitation_code=new_user_invitation_code,
-                    inviter=inviter_user
+                    phone_number=phone_number, 
+                    password=password, 
+                    invitation_code=new_user_invitation_code, 
+                    inviter=inviter_user 
                 )
                 # O UsuarioManager.create_user já chama Renda.objects.create(usuario=user)
                 # Se create_user for bem-sucedido, tanto o usuário quanto o seu objeto Renda são criados.
                 
                 # Atualizar o username (se necessário, embora phone_number já seja único)
-                user.username = phone_number
+                user.username = phone_number 
                 user.save() # Guardar quaisquer alterações no objeto usuário (como o username)
 
             # Se chegarmos aqui, o usuário e a Renda foram criados com sucesso
@@ -122,7 +122,7 @@ def logout_view(request):
 
 @login_required
 def menu_view(request):
-    niveis = Nivel.objects.all()
+    niveis = Nivel.objects.all() 
     context = {
         'niveis': niveis,
     }
@@ -142,15 +142,15 @@ def deposito_view(request):
                 depositor_name = request.POST.get('depositor_name')
                 comprovante = request.FILES['proof']
                 
-                # CORRIGIDO: Usar Decimal para valores monetários
-                valor_deposito = Decimal(valor_deposito_str)
+                # Usar Decimal para valores monetários para evitar problemas de precisão
+                valor_deposito = Decimal(valor_deposito_str) 
 
-                # CORRIGIDO: Status inicial do depósito deve ser 'Pendente'
+                # Status inicial do depósito deve ser 'Pendente'
                 novo_deposito = Deposito.objects.create(
                     usuario=request.user,
                     valor=valor_deposito,
                     comprovativo_imagem=comprovante,
-                    status='Pendente'
+                    status='Pendente' 
                 )
                 
                 messages.success(request, 'Comprovante enviado com sucesso! Aguarde a aprovação do administrador.')
@@ -158,7 +158,7 @@ def deposito_view(request):
                 
             except Exception as e:
                 messages.error(request, f'Ocorreu um erro ao enviar o comprovante: {e}')
-                return redirect('deposito')
+                return redirect('deposito') 
         else:
             valor_deposito = request.POST.get('amount')
             banco_nome = request.POST.get('method')
@@ -176,52 +176,60 @@ def deposito_view(request):
     return render(request, 'plataforma/deposito.html', context)
 
 # IMPORTANTE: Esta função contém a lógica para *aprovar* depósitos e conceder o subsídio de 15%.
-# Você precisará chamar esta função a partir do seu painel de administração Django ou de uma view personalizada
+# Ela deve ser chamada a partir do painel de administração Django ou de uma view personalizada
 # para processar a aprovação dos depósitos enviados pelos usuários.
 def aprovar_deposito_com_subsidio(deposito_id):
     try:
         deposito = Deposito.objects.get(id=deposito_id)
     except Deposito.DoesNotExist:
+        print(f"Erro: Depósito com ID {deposito_id} não encontrado.")
         return {'status': 'error', 'message': 'Depósito não encontrado.'}
 
-    # Verifica se o depósito já foi aprovado para evitar reprocessamento
+    # Verifica se o depósito já foi aprovado para evitar reprocessamento.
     if deposito.status == 'Aprovado':
+        print(f"Info: Depósito {deposito_id} já aprovado. Nenhuma ação necessária.")
         return {'status': 'info', 'message': 'Depósito já aprovado.'}
 
-    # Marca o depósito como aprovado
-    deposito.status = 'Aprovado'
-    deposito.save()
+    # Inicia uma transação atómica para garantir que todas as operações sejam bem-sucedidas ou nenhuma delas.
+    try:
+        with transaction.atomic():
+            # 1. Marca o depósito como aprovado.
+            deposito.status = 'Aprovado'
+            deposito.save()
+            print(f"Depósito {deposito_id} marcado como 'Aprovado'.")
 
-    # CRÍTICO: Adiciona o valor do DEPÓSITO (o dinheiro do próprio usuário) ao saldo disponível do usuário.
-    # Isto NÃO é um subsídio. É o valor que o usuário depositou sendo creditado.
-    deposito.usuario.saldo_disponivel += deposito.valor
-    deposito.usuario.save()
+            # 2. Credita o VALOR DO DEPÓSITO (o dinheiro do próprio usuário) ao saldo disponível do USUÁRIO QUE DEPOSITOU.
+            # ESTA OPERAÇÃO NÃO É O SUBSÍDIO DE 15%. É o dinheiro que o usuário investiu.
+            deposito.usuario.saldo_disponivel += deposito.valor
+            deposito.usuario.save()
+            print(f"Valor do depósito ({deposito.valor:.2f} Kz) creditado ao saldo do usuário {deposito.usuario.phone_number}.")
 
-    convidador = deposito.usuario.inviter
-    
-    # LÓGICA DE SUBSÍDIO PARA O CONVIDADOR:
-    # 1. Se o convidador existir.
-    # 2. Verifica se o convidador tem um nível ativo.
-    if convidador:
-        has_active_level_inviter = NivelAlugado.objects.filter(usuario=convidador, is_active=True).exists()
+            # 3. Lógica de SUBSÍDIO DE 15% para o CONVIDADOR.
+            # O convidador SÓ ganha este subsídio se:
+            #    a) Existir um convidador (ou seja, o depositante foi convidado por alguém).
+            #    b) O convidador tiver um NÍVEL DE INVESTIMENTO ATIVO.
+            convidador = deposito.usuario.inviter
+            if convidador:
+                has_active_level_inviter = NivelAlugado.objects.filter(usuario=convidador, is_active=True).exists()
+                if has_active_level_inviter:
+                    percentagem_subs_convite = Decimal('0.15') # 15% de subsídio
+                    valor_subs_convite = deposito.valor * percentagem_subs_convite
 
-        if has_active_level_inviter:
-            # 1) Se o usuário com nível de aluguel ativo convidar outros a investirem na plataforma com o seu link,
-            # e outros investirem, ele ganha subsídio de 15% do valor que a pessoa que convidar investir.
-            percentagem_subs_convite = Decimal('0.15') # 15% de subsídio
-            valor_subs_convite = deposito.valor * percentagem_subs_convite
-
-            # Adiciona o subsídio APENAS ao convidador.
-            convidador.saldo_subsidio += valor_subs_convite
-            convidador.saldo_disponivel += valor_subs_convite # O subsídio também soma no saldo disponível do convidador
-            convidador.save()
-            print(f"Subsídio de {valor_subs_convite:.2f} Kz concedido ao convidador {convidador.username if convidador.username else convidador.phone_number} pelo depósito de {deposito.usuario.username if deposito.usuario.username else deposito.usuario.phone_number}.")
-        else:
-            # 2) Pessoa que não tem nível em aluguel ativo pode convidar outros a investir com o seu link,
-            # mesmo a pessoa que convidar investir ele não ganha nenhum subsídio.
-            print(f"Convidador {convidador.username if convidador.username else convidador.phone_number} não tem nível ativo. Subsídio de convite NÃO concedido.")
-
-    return {'status': 'success', 'message': f'Depósito {deposito_id} aprovado e subsídio concedido, se aplicável.'}
+                    # Adiciona o subsídio APENAS ao convidador.
+                    convidador.saldo_subsidio += valor_subs_convite
+                    convidador.saldo_disponivel += valor_subs_convite # O subsídio também soma no saldo disponível do convidador
+                    convidador.save()
+                    print(f"Subsídio de {valor_subs_convite:.2f} Kz concedido ao convidador {convidador.username if convidador.username else convidador.phone_number} (com nível ativo) pelo depósito de {deposito.usuario.username if deposito.usuario.username else deposito.usuario.phone_number}.")
+                else:
+                    print(f"Convidador {convidador.username if convidador.username else convidador.phone_number} NÃO tem nível ativo. Subsídio de convite NÃO concedido.")
+            else:
+                print("O usuário não foi convidado por ninguém. Nenhum subsídio de convite a ser processado.")
+        
+        return {'status': 'success', 'message': f'Depósito {deposito_id} aprovado e subsídio concedido, se aplicável.'}
+    except Exception as e:
+        # Se ocorrer qualquer erro dentro do bloco atómico, a transação será revertida.
+        print(f"Erro CRÍTICO ao aprovar depósito {deposito_id} e conceder subsídio: {e}")
+        return {'status': 'error', 'message': f'Ocorreu um erro ao aprovar o depósito e processar o subsídio: {e}'}
 
 
 @login_required
@@ -255,11 +263,11 @@ def saque_view(request):
         iban_cliente = None
         messages.warning(request, "Por favor, preencha suas coordenadas bancárias no seu perfil antes de solicitar um saque.")
 
-    # NOVA LÓGICA: Usuário só pode sacar se tiver um nível ativo.
+    # REFORÇO DA LÓGICA: Usuário SÓ pode sacar se tiver um nível ativo.
     has_active_level_user = NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists()
     if not has_active_level_user:
         messages.error(request, "Você precisa ter um nível de investimento ativo para realizar saques.")
-        return redirect('menu') # Ou outra página apropriada
+        return redirect('menu') # Redireciona para o menu se não tiver nível ativo
 
     if request.method == 'POST':
         if not tem_detalhes_bancarios:
@@ -277,7 +285,7 @@ def saque_view(request):
             return redirect('saque')
             
         try:
-            # CORRIGIDO: Usar Decimal para valores monetários
+            # Usar Decimal para valores monetários
             valor_saque_bruto = Decimal(valor_saque_bruto)
         except ValueError:
             messages.error(request, 'Valor de saque inválido.')
@@ -295,16 +303,17 @@ def saque_view(request):
         valor_saque_liquido = valor_saque_bruto - valor_taxa
 
         try:
-            Saque.objects.create(
-                usuario=usuario,
-                valor=valor_saque_liquido,
-                iban_cliente=iban_cliente,
-                status='Pendente'
-            )
-            
-            usuario.saldo_disponivel -= valor_saque_bruto
-            usuario.total_sacado += valor_saque_liquido
-            usuario.save()
+            with transaction.atomic(): # Garante atomicidade para operações de saque
+                Saque.objects.create(
+                    usuario=usuario,
+                    valor=valor_saque_liquido,
+                    iban_cliente=iban_cliente,
+                    status='Pendente'
+                )
+                
+                usuario.saldo_disponivel -= valor_saque_bruto
+                usuario.total_sacado += valor_saque_liquido
+                usuario.save()
             
             messages.success(request, f'Solicitação de saque de {valor_saque_liquido:.2f} KZ enviada com sucesso! Uma taxa de {valor_taxa:.2f} KZ foi aplicada.')
             return redirect('saque')
@@ -349,7 +358,7 @@ def realizar_tarefa(request):
 
     for nivel_alugado in niveis_alugados_ativos:
         if nivel_alugado.ultima_tarefa and (agora - nivel_alugado.ultima_tarefa) < timedelta(hours=24):
-            continue
+            continue 
         
         try:
             renda_diaria = nivel_alugado.nivel.ganho_diario
@@ -419,14 +428,14 @@ def equipa_view(request):
     
     link_convite = request.build_absolute_uri(f'/cadastro/?convite={usuario_logado.invitation_code}')
     
-    membros_equipa = Usuario.objects.filter(inviter=usuario_logado)
+    membros_equipa = Usuario.objects.filter(inviter=usuario_logado) 
     
     lista_membros = []
     for membro in membros_equipa:
         tem_nivel_ativo = NivelAlugado.objects.filter(usuario=membro, is_active=True).exists()
         
         lista_membros.append({
-            'nome': membro.username if membro.username else membro.phone_number,
+            'nome': membro.username if membro.username else membro.phone_number, 
             'numero': membro.phone_number,
             'tem_nivel_ativo': tem_nivel_ativo
         })
@@ -551,7 +560,7 @@ def abrir_premio(request):
             premio_ganho = random.choice(premios)
 
         usuario.saldo_disponivel += premio_ganho.valor
-        usuario.saldo_subsidio += premio_ganho.valor
+        usuario.saldo_subsidio += premio_ganho.valor 
         
         usuario.spins_remaining -= 1
         usuario.save()
@@ -582,7 +591,7 @@ def renda_view(request):
     
     niveis_alugados = NivelAlugado.objects.filter(usuario=usuario, is_active=True).order_by('-data_inicio')
     if niveis_alugados.exists():
-        nivel_cliente = niveis_alugados.first().nivel.nome_nivel
+        nivel_cliente = niveis_alugados.first().nivel.nome_nivel 
     else:
         nivel_cliente = "Nível Básico (Sem nível alugado)"
 
@@ -596,4 +605,3 @@ def renda_view(request):
         'total_sacado': usuario.total_sacado,
     }
     return render(request, 'plataforma/renda.html', context)
-    
