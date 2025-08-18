@@ -123,8 +123,10 @@ def logout_view(request):
 @login_required
 def menu_view(request):
     niveis = Nivel.objects.all() 
+    config = Config.objects.first() # Obtém o objeto de configuração
     context = {
         'niveis': niveis,
+        'config': config, # Passa o objeto de configuração para o template
     }
     return render(request, 'plataforma/menu.html', context)
 
@@ -408,6 +410,7 @@ def alugar_nivel(request):
                 usuario=usuario,
                 nivel=nivel_a_alugar,
                 data_inicio=timezone.now(),
+                data_expiracao=timezone.now() + timedelta(days=nivel_a_alugar.ciclo_dias), # Calcula a data de expiração
                 is_active=True
             )
             
@@ -422,6 +425,7 @@ def alugar_nivel(request):
 def equipa_view(request):
     usuario_logado = request.user
     
+    # CORREÇÃO CRÍTICA AQUI: Usar o invitation_code do usuario_logado
     link_convite = request.build_absolute_uri(f'/cadastro/?convite={usuario_logado.invitation_code}')
     
     membros_equipa = Usuario.objects.filter(inviter=usuario_logado) 

@@ -494,12 +494,27 @@
     </nav>
     
     <div class="social-buttons-container">
-        <a href="https://chat.whatsapp.com/SEU_LINK_DO_WHATSAPP" target="_blank" class="social-btn whatsapp-btn">
+        {# CORRIGIDO: Agora usa o link do WhatsApp das configurações #}
+        {% if config and config.link_grupo_whatsapp %}
+        <a href="{{ config.link_grupo_whatsapp }}" target="_blank" class="social-btn whatsapp-btn">
             <img src="{% static 'plataforma/images/icon_whatsapp.png' %}" alt="WhatsApp">
         </a>
-        <a href="https://t.me/SEU_LINK_DO_TELEGRAM" target="_blank" class="social-btn telegram-btn">
+        {% else %}
+        <a href="#" target="_blank" class="social-btn whatsapp-btn"> {# Fallback link #}
+            <img src="{% static 'plataforma/images/icon_whatsapp.png' %}" alt="WhatsApp">
+        </a>
+        {% endif %}
+
+        {# CORRIGIDO: Agora usa o link do Telegram das configurações #}
+        {% if config and config.link_grupo_telegram %}
+        <a href="{{ config.link_grupo_telegram }}" target="_blank" class="social-btn telegram-btn">
             <img src="{% static 'plataforma/images/icon_telegram.png' %}" alt="Telegram">
         </a>
+        {% else %}
+        <a href="#" target="_blank" class="social-btn telegram-btn"> {# Fallback link #}
+            <img src="{% static 'plataforma/images/icon_telegram.png' %}" alt="Telegram">
+        </a>
+        {% endif %}
     </div>
 
     <script>
