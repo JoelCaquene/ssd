@@ -263,19 +263,22 @@ def saque_view(request):
         iban_cliente = None
         messages.warning(request, "Por favor, preencha suas coordenadas bancárias no seu perfil antes de solicitar um saque.")
 
-    # REFORÇO DA LÓGICA: Usuário SÓ pode sacar se tiver um nível ativo.
-    has_active_level_user = NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists()
-    if not has_active_level_user:
-        messages.error(request, "Você precisa ter um nível de investimento ativo para realizar saques.")
-        return redirect('menu') # Redireciona para o menu se não tiver nível ativo
+    # REMOVIDO: A verificação de nível ativo para ACESSO à página de saque.
+    # A página agora é acessível a todos, mas as validações de saque ainda se aplicam.
+    # has_active_level_user = NivelAlugado.objects.filter(usuario=usuario, is_active=True).exists()
+    # if not has_active_level_user:
+    #     messages.error(request, "Você precisa ter um nível de investimento ativo para realizar saques.")
+    #     return redirect('menu') # Redireciona para o menu se não tiver nível ativo
 
     if request.method == 'POST':
+        # Esta validação permanece: só pode sacar quem tem detalhes bancários
         if not tem_detalhes_bancarios:
             messages.error(request, "Você precisa cadastrar suas informações bancárias para sacar.")
             return redirect('saque')
 
         valor_saque_bruto = request.POST.get('amount')
         
+        # Estas validações permanecem: horário de saque, valor obrigatório, valor mínimo, saldo suficiente.
         if not pode_sacar:
             messages.error(request, f'O saque só pode ser realizado entre as {config.horario_saque_inicio.strftime("%H:%M")}h e {config.horario_saque_fim.strftime("%H:%M")}h (Horário de Angola).')
             return redirect('saque')
